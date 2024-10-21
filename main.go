@@ -148,7 +148,8 @@ func setupDNS(ctx context.Context) {
 
 	changeSet, err := r53.ChangeResourceRecordSets(ctx, input)
 	if err != nil {
-		log.Fatalf("Failed to create DNS: %v", err.Error())
+		log.Printf("Failed to create DNS: %v", err.Error())
+		return
 	}
 
 	log.Print("Request sent to Route 53...")
@@ -156,9 +157,12 @@ func setupDNS(ctx context.Context) {
 }
 
 func waitForSync(ctx context.Context, changeSet *route53.ChangeResourceRecordSetsOutput) {
+	failures := 0
 	for {
-		time.Sleep(5 * time.Second)
-		failures := 0
+		if err := SleepWithContext(ctx, 5*time.Second); err != nil {
+			log.Print("Context cancelled, stop waiting for Route53 ChangeSet to propogate")
+			return
+		}
 
 		changeOutput, err := r53.GetChange(ctx, &route53.GetChangeInput{
 			Id: changeSet.ChangeInfo.Id,
@@ -166,11 +170,10 @@ func waitForSync(ctx context.Context, changeSet *route53.ChangeResourceRecordSet
 
 		if err != nil {
 			log.Printf("Failed getting ChangeSet result: %v", err)
-			failures++
-		}
-
-		if failures > 3 {
-			log.Fatal("Failed the maximum times getting changeset, exiting")
+			if failures++; failures > 3 {
+				log.Fatal("Failed the maximum times getting changeset, exiting")
+			}
+			continue
 		}
 
 		if changeOutput.ChangeInfo.Status == "INSYNC" {
@@ -207,6 +210,17 @@ func getEcsMetadata() (*ecsMetadata, error) {
 		return nil, err
 	}
 	return metadata, nil
+}
+
+func SleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func main() {
