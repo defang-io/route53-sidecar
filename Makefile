@@ -6,6 +6,7 @@ DOCKER_IMAGE_NAME:=$(DOCKER)/route53-sidecar
 
 DOCKER_IMAGE_ARM64:=$(DOCKER_IMAGE_NAME):arm64-$(VERSION)
 DOCKER_IMAGE_AMD64:=$(DOCKER_IMAGE_NAME):amd64-$(VERSION)
+BUILD_FLAGS:=-ldflags "-s -w -X main.version=$(VERSION)" -trimpath
 
 .PHONY: help
 help:
@@ -17,15 +18,15 @@ ensure: ## Run go get -u
 
 .PHONY: build
 build: ensure ## Build a local binary
-	go build
+	go build $(BUILD_FLAGS) -o route53-sidecar
 
 .PHONY: build-amd64
 build-amd64: ensure
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o route53-sidecar
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o route53-sidecar
 
 .PHONY: build-arm64
 build-arm64: ensure
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o route53-sidecar
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(BUILD_FLAGS) -o route53-sidecar
 
 .PHONY: docker-amd64
 docker-amd64: build-amd64

@@ -10,6 +10,10 @@ Sidecar that adds a route53 record on container start, removes it on SIGHUP shut
 5. Finally it waits for DNS TTL time to expire
 6. Then exits 0
 
+## Single Action Mode
+If you want to just add a record and exit, you can use the `-register` flag. This will add the record and exit immediately.
+And to just remove the record, you can use the `-unregister` flag, this will remove the record and exit immediately.
+
 Environment variables:
 * `IPADDRESS` The ip address, or set as `public-ipv4` (default) to get it from instance metadata, `ecs` to get it from ECS container metadata
 * `DNS` The fully qualified DNS name to set

@@ -1,87 +1,100 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/ec2metadata"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/route53"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
+	"github.com/aws/aws-sdk-go-v2/service/route53"
+	"github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/namsral/flag"
-	log "github.com/sirupsen/logrus"
 )
 
 var (
+	version = "dev"
+
 	dns        string
 	hostedZone string
 	dnsTTL     int
 	ipAddress  string
 
-	gracefulStop = make(chan os.Signal, 1)
-	sess         = session.Must(session.NewSession())
+	register, unRegister bool
+
+	r53 *route53.Client
 )
 
-func configureFromFlags() {
+func configureFromFlags(ctx context.Context) {
 	flag.StringVar(&dns, "dns", "my.example.com", "DNS name to register in Route53")
 	flag.StringVar(&hostedZone, "hostedzone", "Z2AAAABCDEFGT4", "Hosted zone ID in route53")
 	flag.IntVar(&dnsTTL, "dnsttl", 10, "Timeout for DNS entry")
 	flag.StringVar(&ipAddress, "ipaddress", "public-ipv4", "IP Address for A Record")
+	flag.BoolVar(&register, "register", false, "Register DNS and exit")
+	flag.BoolVar(&unRegister, "unregister", false, "Unregister DNS and exit")
 	flag.Parse()
 
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Fatalf("Failed to initialize aws config: %v", err)
+	}
+
 	if ipAddress == "public-ipv4" {
-		log.Infof("Fetching IP Address from EC2 public-ipv4")
-		metadata := ec2metadata.New(sess)
-		publicIpv4, err := metadata.GetMetadata("public-ipv4")
+		log.Printf("Fetching IP Address from EC2 public-ipv4")
+
+		client := imds.NewFromConfig(cfg)
+		output, err := client.GetMetadata(ctx, &imds.GetMetadataInput{Path: "public-ipv4"})
+		if err != nil {
+			log.Fatalf("Unable to retrieve the public IPv4 address from the EC2 metadata: %s\n", err)
+		}
+		publicIpv4, err := io.ReadAll(output.Content)
 		if err != nil {
 			log.Fatalf("Failed to fetch IPV4 public IP: %v", err)
 		}
-		ipAddress = publicIpv4
+		ipAddress = string(publicIpv4)
 	} else if ipAddress == "ecs" {
-		log.Infof("Fetching IP Address from ECS metadata")
+		log.Printf("Fetching IP Address from ECS metadata")
 		metadata, err := getEcsMetadata()
 		if err != nil {
 			log.Fatalf("Failed to fetch ECS metadata: %v", err)
 		}
 		ipAddress = metadata.Networks[0].IPv4Addresses[0] // use the first IP address
 	}
+
+	r53 = route53.NewFromConfig(cfg)
 }
 
 func dumpConfig() {
-	log.Infof("DNS=%v", dns)
-	log.Infof("DNSTTL=%v", dnsTTL)
-	log.Infof("HOSTEDZONE=%v", hostedZone)
-	log.Infof("IPADDRESS=%v", ipAddress)
+	log.Printf("Version=%v", version)
+	log.Printf("DNS=%v", dns)
+	log.Printf("DNSTTL=%v", dnsTTL)
+	log.Printf("HOSTEDZONE=%v", hostedZone)
+	log.Printf("IPADDRESS=%v", ipAddress)
 }
 
-func catchSignals() {
-	sig := <-gracefulStop
-	log.Infof("Caught Signal: %+v", sig)
-
-	tearDownDNS()
-}
-
-func tearDownDNS() {
-	log.Infof("Tearing down Route 53 DNS Name A %s => %s", dns, ipAddress)
-	svc := route53.New(sess)
+func tearDownDNS(ctx context.Context) {
+	log.Printf("Tearing down Route 53 DNS Name A %s => %s", dns, ipAddress)
 	input := &route53.ChangeResourceRecordSetsInput{
-		ChangeBatch: &route53.ChangeBatch{
-			Changes: []*route53.Change{
+		ChangeBatch: &types.ChangeBatch{
+			Changes: []types.Change{
 				{
-					Action: aws.String("DELETE"),
-					ResourceRecordSet: &route53.ResourceRecordSet{
+					Action: types.ChangeActionDelete,
+					ResourceRecordSet: &types.ResourceRecordSet{
 						Name: aws.String(dns),
-						ResourceRecords: []*route53.ResourceRecord{
+						ResourceRecords: []types.ResourceRecord{
 							{
 								Value: aws.String(ipAddress),
 							},
 						},
 						TTL:           aws.Int64(int64(dnsTTL)),
-						Type:          aws.String("A"),
+						Type:          types.RRTypeA,
 						Weight:        aws.Int64(100),
 						SetIdentifier: aws.String(ipAddress),
 					},
@@ -91,40 +104,38 @@ func tearDownDNS() {
 		HostedZoneId: aws.String(hostedZone),
 	}
 
-	changeSet, err := svc.ChangeResourceRecordSets(input)
+	changeSet, err := r53.ChangeResourceRecordSets(ctx, input)
 
 	if err != nil {
 		log.Fatalf("Failed to delete DNS, exiting: %v", err.Error())
 	}
 
-	log.Info("Request sent to Route 53...")
-	waitForSync(changeSet)
+	log.Print("Request sent to Route 53...")
+	waitForSync(ctx, changeSet)
 
 	// Then wait the DNS Timeout to expire
-	log.Infof("Waiting for DNS Timeout to expire (%d seconds)", dnsTTL)
+	log.Printf("Waiting for DNS Timeout to expire (%d seconds)", dnsTTL)
 	time.Sleep(time.Duration(dnsTTL) * time.Second)
-	log.Info("DNS Timeout expiry finished")
-	log.Exit(0)
+	log.Print("DNS Timeout expiry finished")
 }
 
-func setupDNS() {
-	log.Infof("Setting up Route 53 DNS Name A %s => %s", dns, ipAddress)
+func setupDNS(ctx context.Context) {
+	log.Printf("Setting up Route 53 DNS Name A %s => %s", dns, ipAddress)
 
-	svc := route53.New(sess)
 	input := &route53.ChangeResourceRecordSetsInput{
-		ChangeBatch: &route53.ChangeBatch{
-			Changes: []*route53.Change{
+		ChangeBatch: &types.ChangeBatch{
+			Changes: []types.Change{
 				{
-					Action: aws.String("UPSERT"),
-					ResourceRecordSet: &route53.ResourceRecordSet{
+					Action: types.ChangeActionUpsert,
+					ResourceRecordSet: &types.ResourceRecordSet{
 						Name: aws.String(dns),
-						ResourceRecords: []*route53.ResourceRecord{
+						ResourceRecords: []types.ResourceRecord{
 							{
 								Value: aws.String(ipAddress),
 							},
 						},
 						TTL:           aws.Int64(int64(dnsTTL)),
-						Type:          aws.String("A"),
+						Type:          types.RRTypeA,
 						Weight:        aws.Int64(100),
 						SetIdentifier: aws.String(ipAddress),
 					},
@@ -135,34 +146,26 @@ func setupDNS() {
 		HostedZoneId: aws.String(hostedZone),
 	}
 
-	select {
-	case sig := <-gracefulStop:
-		log.Fatalf("Caught Signal before change: %+v", sig)
-	default:
-	}
-
-	changeSet, err := svc.ChangeResourceRecordSets(input)
+	changeSet, err := r53.ChangeResourceRecordSets(ctx, input)
 	if err != nil {
 		log.Fatalf("Failed to create DNS: %v", err.Error())
 	}
 
-	log.Info("Request sent to Route 53...")
-	waitForSync(changeSet)
+	log.Print("Request sent to Route 53...")
+	waitForSync(ctx, changeSet)
 }
 
-func waitForSync(changeSet *route53.ChangeResourceRecordSetsOutput) {
-	svc := route53.New(sess)
-
+func waitForSync(ctx context.Context, changeSet *route53.ChangeResourceRecordSetsOutput) {
 	for {
 		time.Sleep(5 * time.Second)
 		failures := 0
 
-		changeOutput, err := svc.GetChange(&route53.GetChangeInput{
+		changeOutput, err := r53.GetChange(ctx, &route53.GetChangeInput{
 			Id: changeSet.ChangeInfo.Id,
 		})
 
 		if err != nil {
-			log.Errorf("Failed getting ChangeSet result: %v", err)
+			log.Printf("Failed getting ChangeSet result: %v", err)
 			failures++
 		}
 
@@ -170,12 +173,12 @@ func waitForSync(changeSet *route53.ChangeResourceRecordSetsOutput) {
 			log.Fatal("Failed the maximum times getting changeset, exiting")
 		}
 
-		if *changeOutput.ChangeInfo.Status == "INSYNC" {
-			log.Info("Route53 Change Completed")
+		if changeOutput.ChangeInfo.Status == "INSYNC" {
+			log.Print("Route53 Change Completed")
 			break
 		}
 
-		log.Infof("Route53 Change not yet propogated (ChangeInfo.Status = %s)...", *changeOutput.ChangeInfo.Status)
+		log.Printf("Route53 Change not yet propogated (ChangeInfo.Status = %s)...", changeOutput.ChangeInfo.Status)
 	}
 }
 
@@ -207,11 +210,19 @@ func getEcsMetadata() (*ecsMetadata, error) {
 }
 
 func main() {
-	configureFromFlags()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	configureFromFlags(ctx)
 	dumpConfig()
 
-	signal.Notify(gracefulStop, syscall.SIGTERM, syscall.SIGINT)
-	setupDNS()
-
-	catchSignals()
+	if register {
+		setupDNS(ctx)
+	} else if unRegister {
+		tearDownDNS(ctx)
+	} else { // Setup DNS then teardown when sigterm or sigint is received
+		setupDNS(ctx)
+		<-ctx.Done()                      // Wait for signal, not calling stop() to make sure we don't get killed during clean up
+		tearDownDNS(context.Background()) // Clenup needs its own context
+	}
 }
