@@ -5,9 +5,6 @@ on:
     branches:
       - '*'
 
-env:
-  DOCKER_REPO: edwardrf
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,6 +30,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+          cache: false # Avoid warning: https://github.com/actions/setup-go/issues/403
 
       - name: Install dependencies
         run: go get -t -u ./...
@@ -42,7 +40,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -ldflags "-s -w -X main.version=${{ env.VERSION }}" -trimpath -o route53-sidecar
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PASSWORD }}
@@ -67,7 +65,7 @@ jobs:
           echo "VERSION=$shortSha" >> $GITHUB_ENV
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PASSWORD }}
