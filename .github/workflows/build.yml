@@ -58,6 +58,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set version to short commit SHA
         run: |
           shortSha=$(git rev-parse --short ${{ github.sha }})
