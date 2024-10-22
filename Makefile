@@ -1,8 +1,9 @@
 # VERSION is the version we should download and use.
 VERSION:=$(shell git rev-parse --short HEAD)
 # DOCKER is the docker image repo we need to push to.
-DOCKER:=defangio
-DOCKER_IMAGE_NAME:=$(DOCKER)/route53-sidecar
+DOCKER_REPO:=defangio
+DOCKER_USER:=edwardrf
+DOCKER_IMAGE_NAME:=$(DOCKER_REPO)/route53-sidecar
 
 DOCKER_IMAGE_ARM64:=$(DOCKER_IMAGE_NAME):arm64-$(VERSION)
 DOCKER_IMAGE_AMD64:=$(DOCKER_IMAGE_NAME):amd64-$(VERSION)
@@ -50,4 +51,4 @@ push: docker login ## Push all docker images
 
 .PHONY: login
 login: ## Login to docker
-	@docker login -u $(DOCKER)
+	@docker login -u $(DOCKER_USER)
