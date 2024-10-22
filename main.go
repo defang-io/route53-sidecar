@@ -66,6 +66,9 @@ func configureFromFlags(ctx context.Context) {
 			log.Fatalf("Failed to fetch ECS metadata: %v", err)
 		}
 		ipAddress = metadata.Networks[0].IPv4Addresses[0] // use the first IP address
+		if metadata.DesiredStatus == "STOPPED" {
+			log.Fatalf("ECS container is being stopped, exiting")
+		}
 	}
 
 	r53 = route53.NewFromConfig(cfg)
@@ -186,7 +189,8 @@ func waitForSync(ctx context.Context, changeSet *route53.ChangeResourceRecordSet
 }
 
 type ecsMetadata struct {
-	Networks []struct {
+	DesiredStatus string `json:"DesiredStatus"`
+	Networks      []struct {
 		IPv4Addresses []string `json:"IPv4Addresses"`
 	} `json:"Networks"`
 }
