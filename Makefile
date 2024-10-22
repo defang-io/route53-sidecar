@@ -2,7 +2,7 @@
 VERSION:=$(shell git rev-parse --short HEAD)
 # DOCKER is the docker image repo we need to push to.
 DOCKER_REPO:=defangio
-DOCKER_USER:=edwardrf
+DOCKER_USER:=defangio
 DOCKER_IMAGE_NAME:=$(DOCKER_REPO)/route53-sidecar
 
 DOCKER_IMAGE_ARM64:=$(DOCKER_IMAGE_NAME):arm64-$(VERSION)
