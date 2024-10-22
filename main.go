@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	version = "dev"
+	version = "dev" // overridden by -ldflags
 
 	dns        string
 	hostedZone string
@@ -241,6 +241,6 @@ func main() {
 	} else { // Setup DNS then teardown when sigterm or sigint is received
 		setupDNS(ctx)
 		<-ctx.Done()                      // Wait for signal, not calling stop() to make sure we don't get killed during clean up
-		tearDownDNS(context.Background()) // Clenup needs its own context
+		tearDownDNS(context.Background()) // Cleanup needs its own context
 	}
 }
