@@ -50,7 +50,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          IMAGE_NAME=${{ env.DOCKER_REPO }}/route53-sidecar
+          IMAGE_NAME=${{ vars.DOCKER_REPO }}/route53-sidecar
           IMAGE_TAG=${{ matrix.arch }}-${{ env.VERSION }}
           docker build --platform linux/${{ matrix.arch }} -t route53-sidecar -t $IMAGE_NAME:$IMAGE_TAG .
           docker push $IMAGE_NAME:$IMAGE_TAG
@@ -75,7 +75,7 @@ jobs:
 
       - name: Create and push Docker manifest
         run: |
-          IMAGE_NAME=${{ env.DOCKER_REPO }}/route53-sidecar
+          IMAGE_NAME=${{ vars.DOCKER_REPO }}/route53-sidecar
           VERSION=${{ env.VERSION }}
           docker manifest create $IMAGE_NAME:$VERSION \
             --amend $IMAGE_NAME:amd64-$VERSION \
