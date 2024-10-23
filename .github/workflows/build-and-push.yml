@@ -1,0 +1,87 @@
+name: Build and Push to Dockerhub
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set version to short commit SHA
+        run: |
+          shortSha=$(git rev-parse --short ${{ github.sha }})
+          echo "VERSION=$shortSha" >> $GITHUB_ENV
+
+      - name: Set up Go environment
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          # cache: false # Avoid warning: https://github.com/actions/setup-go/issues/403
+
+      - name: Install dependencies
+        run: go get -t -u ./...
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -ldflags "-s -w -X main.version=${{ env.VERSION }}" -trimpath -o route53-sidecar
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE_NAME=${{ env.DOCKER_REPO }}/route53-sidecar
+          IMAGE_TAG=${{ matrix.arch }}-${{ env.VERSION }}
+          docker build --platform linux/${{ matrix.arch }} -t route53-sidecar -t $IMAGE_NAME:$IMAGE_TAG .
+          docker push $IMAGE_NAME:$IMAGE_TAG
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set version to short commit SHA
+        run: |
+          shortSha=$(git rev-parse --short ${{ github.sha }})
+          echo "VERSION=$shortSha" >> $GITHUB_ENV
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Create and push Docker manifest
+        run: |
+          IMAGE_NAME=${{ env.DOCKER_REPO }}/route53-sidecar
+          VERSION=${{ env.VERSION }}
+          docker manifest create $IMAGE_NAME:$VERSION \
+            --amend $IMAGE_NAME:amd64-$VERSION \
+            --amend $IMAGE_NAME:arm64-$VERSION
+          docker manifest create $IMAGE_NAME:latest \
+            --amend $IMAGE_NAME:amd64-$VERSION \
+            --amend $IMAGE_NAME:arm64-$VERSION
+          docker manifest push --purge $IMAGE_NAME:$VERSION
+          docker manifest push --purge $IMAGE_NAME:latest
