@@ -26,6 +26,7 @@ var (
 	hostedZone string
 	dnsTTL     int
 	ipAddress  string
+	setupDelay int
 
 	register, unRegister bool
 
@@ -39,6 +40,7 @@ func configureFromFlags(ctx context.Context) {
 	flag.StringVar(&ipAddress, "ipaddress", "public-ipv4", "IP Address for A Record")
 	flag.BoolVar(&register, "register", false, "Register DNS and exit")
 	flag.BoolVar(&unRegister, "unregister", false, "Unregister DNS and exit")
+	flag.IntVar(&setupDelay, "setupdelay", 10, "Wait time before setting up DNS (in seconds)")
 	flag.Parse()
 
 	cfg, err := config.LoadDefaultConfig(ctx)
@@ -80,6 +82,7 @@ func dumpConfig() {
 	log.Printf("DNSTTL=%v", dnsTTL)
 	log.Printf("HOSTEDZONE=%v", hostedZone)
 	log.Printf("IPADDRESS=%v", ipAddress)
+	log.Infof("SETUPDELAY=%v", setupDelay)
 }
 
 func tearDownDNS(ctx context.Context) {
@@ -124,6 +127,13 @@ func tearDownDNS(ctx context.Context) {
 
 func setupDNS(ctx context.Context) {
 	log.Printf("Setting up Route 53 DNS Name A %s => %s", dns, ipAddress)
+
+	// Wait for setupDelay
+	if setupDelay > 0 {
+		log.Infof("Waiting %d seconds before setting up DNS (SETUPDELAY)", setupDelay)
+    time.Sleep(time.Duration(setupDelay) * time.Second)
+		log.Info("Finished waiting")
+	}
 
 	input := &route53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &types.ChangeBatch{
