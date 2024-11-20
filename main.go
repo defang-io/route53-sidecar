@@ -166,6 +166,7 @@ func setupDNS(ctx context.Context) error {
 			}
 			// If the error is due to a conflicting CNAME, wait and try again
 			if err := SleepWithContext(ctx, 5*time.Second); err != nil {
+				log.Print("Context cancelled, stop waiting for Route53 ChangeSet to propogate")
 				return err
 			}
 			continue
