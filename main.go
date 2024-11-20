@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,8 +30,13 @@ var (
 
 	register, unRegister bool
 
-	r53 *route53.Client
+	r53 Route53Client
 )
+
+type Route53Client interface {
+	ChangeResourceRecordSets(ctx context.Context, params *route53.ChangeResourceRecordSetsInput, optFns ...func(*route53.Options)) (*route53.ChangeResourceRecordSetsOutput, error)
+	GetChange(ctx context.Context, params *route53.GetChangeInput, optFns ...func(*route53.Options)) (*route53.GetChangeOutput, error)
+}
 
 func configureFromFlags(ctx context.Context) {
 	flag.StringVar(&dns, "dns", "my.example.com", "DNS name to register in Route53")
@@ -122,7 +128,7 @@ func tearDownDNS(ctx context.Context) {
 	log.Print("DNS Timeout expiry finished")
 }
 
-func setupDNS(ctx context.Context) {
+func setupDNS(ctx context.Context) error {
 	log.Printf("Setting up Route 53 DNS Name A %s => %s", dns, ipAddress)
 
 	input := &route53.ChangeResourceRecordSetsInput{
@@ -149,22 +155,34 @@ func setupDNS(ctx context.Context) {
 		HostedZoneId: aws.String(hostedZone),
 	}
 
-	changeSet, err := r53.ChangeResourceRecordSets(ctx, input)
-	if err != nil {
-		log.Printf("Failed to create DNS: %v", err.Error())
-		return
+	var changeSet *route53.ChangeResourceRecordSetsOutput
+	for {
+		var err error
+		changeSet, err = r53.ChangeResourceRecordSets(ctx, input)
+		if err != nil {
+			if !strings.Contains(err.Error(), "conflicting RRSet of type CNAME") {
+				log.Printf("Failed to create DNS: %v", err.Error())
+				return err
+			}
+			// If the error is due to a conflicting CNAME, wait and try again
+			if err := SleepWithContext(ctx, 5*time.Second); err != nil {
+				return err
+			}
+			continue
+		}
+		break
 	}
 
 	log.Print("Request sent to Route 53...")
-	waitForSync(ctx, changeSet)
+	return waitForSync(ctx, changeSet)
 }
 
-func waitForSync(ctx context.Context, changeSet *route53.ChangeResourceRecordSetsOutput) {
+func waitForSync(ctx context.Context, changeSet *route53.ChangeResourceRecordSetsOutput) error {
 	failures := 0
 	for {
 		if err := SleepWithContext(ctx, 5*time.Second); err != nil {
 			log.Print("Context cancelled, stop waiting for Route53 ChangeSet to propogate")
-			return
+			return err
 		}
 
 		changeOutput, err := r53.GetChange(ctx, &route53.GetChangeInput{
@@ -181,7 +199,7 @@ func waitForSync(ctx context.Context, changeSet *route53.ChangeResourceRecordSet
 
 		if changeOutput.ChangeInfo.Status == "INSYNC" {
 			log.Print("Route53 Change Completed")
-			break
+			return nil
 		}
 
 		log.Printf("Route53 Change not yet propogated (ChangeInfo.Status = %s)...", changeOutput.ChangeInfo.Status)
